@@ -1,28 +1,24 @@
-version: '3.8'
-
 services:
   backend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: oxalis-backend
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     env_file:
       - .env
     environment:
-      - ALLOWED_ORIGINS=http://localhost:${FRONTEND_PORT:-8501},http://127.0.0.1:${FRONTEND_PORT:-8501}
+      ALLOWED_ORIGINS: "http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}"
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: oxalis-frontend
     ports:
-      - "${FRONTEND_PORT:-8501}:8501"
+      - "${FRONTEND_PORT:-3000}:3000"
     environment:
-      - VITE_BACKEND_URL=http://localhost:${BACKEND_PORT:-8000}
+      VITE_BACKEND_URL: "http://localhost:${BACKEND_PORT:-8000}"
     depends_on:
       - backend
     restart: unless-stopped

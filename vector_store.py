@@ -38,7 +38,7 @@ class VectorRAGService:
                 if self._encoder is None:
                     print(f"[VectorRAG] Loading model '{EMBEDDING_MODEL}' with ONNX backend...")
                     # backend="onnx" optimizes inference and drastically reduces memory overhead
-                    self._encoder = SentenceTransformer(EMBEDDING_MODEL, backend="onnx",model_kwargs={"file_name": "onnx/model_O4.onnx"})
+                    self._encoder = SentenceTransformer(EMBEDDING_MODEL, backend="onnx",model_kwargs={"file_name": "model_qint8_avx512.onnx"})
 
         embedding = self._encoder.encode(text, convert_to_numpy=True)
         return embedding.tolist()

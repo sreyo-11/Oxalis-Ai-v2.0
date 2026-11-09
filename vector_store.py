@@ -2,7 +2,6 @@ import asyncio
 import os
 import threading
 import time
-
 from typing import Any, Dict, List
 import numpy as np
 
@@ -27,7 +26,7 @@ class VectorRAGService:
                 self.qdrant_client = None
 
     async def _get_embedding(self, text: str) -> List[float]:
-        """Generate embeddings locally so chat-provider credentials are not used for RAG."""
+        """Generate embeddings locally via ONNX Runtime for minimal RAM footprint."""
         text_clean = text.replace("\n", " ")[:8000]
         return await asyncio.to_thread(self._encode, text_clean)
 
@@ -37,7 +36,9 @@ class VectorRAGService:
         if self._encoder is None:
             with self._encoder_lock:
                 if self._encoder is None:
-                    self._encoder = SentenceTransformer(EMBEDDING_MODEL)
+                    print(f"[VectorRAG] Loading model '{EMBEDDING_MODEL}' with ONNX backend...")
+                    # backend="onnx" optimizes inference and drastically reduces memory overhead
+                    self._encoder = SentenceTransformer(EMBEDDING_MODEL, backend="onnx",model_kwargs={"file_name": "onnx/model_O2.onnx"})
 
         embedding = self._encoder.encode(text, convert_to_numpy=True)
         return embedding.tolist()
@@ -47,45 +48,51 @@ class VectorRAGService:
             return
 
         from qdrant_client.models import Distance, VectorParams
-
-        collections = [c.name for c in self.qdrant_client.get_collections().collections]
-        if COLLECTION_NAME not in collections:
-            self.qdrant_client.create_collection(
-                collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-            )
+        try:
+            collections = [c.name for c in self.qdrant_client.get_collections().collections]
+            if COLLECTION_NAME not in collections:
+                self.qdrant_client.create_collection(
+                    collection_name=COLLECTION_NAME,
+                    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+                )
+        except Exception as exc:
+            print(f"[VectorRAG Collection Error] {exc}")
 
     def _search_qdrant(self, query_vector: List[float], top_k: int) -> List[Dict[str, Any]]:
         if self.qdrant_client is None:
             return []
 
-        query_points = getattr(self.qdrant_client, "query_points", None)
-        if callable(query_points):
-            response = query_points(
-                collection_name=COLLECTION_NAME,
-                query=query_vector,
-                limit=top_k,
-                with_payload=True,
-            )
-            hits = response.points
-        else:
-            legacy_search = getattr(self.qdrant_client, "search", None)
-            if not callable(legacy_search):
-                raise RuntimeError("Qdrant client provides neither query_points nor search.")
-            hits = legacy_search(
-                collection_name=COLLECTION_NAME,
-                query_vector=query_vector,
-                limit=top_k,
-            )
+        try:
+            query_points = getattr(self.qdrant_client, "query_points", None)
+            if callable(query_points):
+                response = query_points(
+                    collection_name=COLLECTION_NAME,
+                    query=query_vector,
+                    limit=top_k,
+                    with_payload=True,
+                )
+                hits = response.points
+            else:
+                legacy_search = getattr(self.qdrant_client, "search", None)
+                if not callable(legacy_search):
+                    raise RuntimeError("Qdrant client provides neither query_points nor search.")
+                hits = legacy_search(
+                    collection_name=COLLECTION_NAME,
+                    query_vector=query_vector,
+                    limit=top_k,
+                )
 
-        return [
-            {
-                "topic": (hit.payload or {}).get("topic", "Past Blueprint"),
-                "content": (hit.payload or {}).get("content", ""),
-                "score": hit.score,
-            }
-            for hit in hits
-        ]
+            return [
+                {
+                    "topic": (hit.payload or {}).get("topic", "Past Blueprint"),
+                    "content": (hit.payload or {}).get("content", ""),
+                    "score": getattr(hit, "score", 0.0),
+                }
+                for hit in hits
+            ]
+        except Exception as exc:
+            print(f"[Qdrant Search Error] {exc}")
+            return []
 
     async def search_similar(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """Search similar context or past blueprints for a given topic."""
@@ -94,28 +101,31 @@ class VectorRAGService:
             
             if self.qdrant_client:
                 self._ensure_collection(len(query_vector))
-                return self._search_qdrant(query_vector, top_k)
-            else:
-                # In-Memory Cosine Similarity Fallback
-                if not self._in_memory_docs:
-                    return []
-                
-                scores = []
-                for doc in self._in_memory_docs:
-                    sim = float(np.dot(query_vector, doc["vector"]) / (
-                        np.linalg.norm(query_vector) * np.linalg.norm(doc["vector"])
-                    ))
-                    scores.append((sim, doc))
-                
-                scores.sort(key=lambda x: x[0], reverse=True)
-                return [
-                    {
-                        "topic": doc["topic"],
-                        "content": doc["content"],
-                        "score": score
-                    }
-                    for score, doc in scores[:top_k]
-                ]
+                results = self._search_qdrant(query_vector, top_k)
+                if results:
+                    return results
+
+            # In-Memory Cosine Similarity Fallback
+            if not self._in_memory_docs:
+                return []
+            
+            q_vec = np.array(query_vector)
+            scores = []
+            for doc in self._in_memory_docs:
+                d_vec = np.array(doc["vector"])
+                denom = np.linalg.norm(q_vec) * np.linalg.norm(d_vec)
+                sim = float(np.dot(q_vec, d_vec) / denom) if denom > 0 else 0.0
+                scores.append((sim, doc))
+            
+            scores.sort(key=lambda x: x[0], reverse=True)
+            return [
+                {
+                    "topic": doc["topic"],
+                    "content": doc["content"],
+                    "score": score
+                }
+                for score, doc in scores[:top_k]
+            ]
         except Exception as exc:
             print(f"[RAG Search Error] {exc}")
             return []

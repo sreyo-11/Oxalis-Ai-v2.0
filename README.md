@@ -151,6 +151,12 @@ npm run dev
 
 5. Deploy and have fun generating projects!
 
+### 6. Live Demo of the App 
+[![Watch the Demo](https://github.com/user-attachments/assets/e0981d5e-0356-455d-9d69-8722b0b6abd9>)] (https://1drv.ms/v/c/c86aaf3a2ed5b40e/IQAEcGKcIksvS7x8orEKAOnLAbFABekFKCzsn4nQ6-bbEQo?e=ozwPdU)
+
+
+
+
 ---
 
 ## License
